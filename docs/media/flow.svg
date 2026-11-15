@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" width="900" height="320" role="img" aria-labelledby="t d">
+<title id="t">How apirecorder detects API drift</title>
+<desc id="d">On day one your integration code runs inside a capture block, producing a redacted baseline recording that you commit. Every week CI runs the same flow into a second recording. apirecorder diff compares the two and exits 1 when something your code relies on has changed.</desc>
+
+<style>
+  .lbl   { font: 12px ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #7d8594; letter-spacing: .4px; }
+  .title { font: 600 13px ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #cdd1d9; }
+  .sub   { font: 11px ui-monospace, Menlo, Consolas, monospace; fill: #7d8594; }
+  .mono  { font: 12px ui-monospace, Menlo, Consolas, monospace; }
+</style>
+
+<rect x="0" y="0" width="900" height="320" rx="10" fill="#16181d"/>
+
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+    <path d="M1 1 L9 5 L1 9" fill="none" stroke="#5c6475" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- lane 1: baseline -->
+<text class="lbl" x="34" y="40">DAY 1 — RECORD THE BASELINE</text>
+
+<rect x="34" y="54" width="186" height="58" rx="7" fill="#22262e" stroke="#3a404b"/>
+<text class="title" x="127" y="78" text-anchor="middle">Your integration code</text>
+<text class="sub" x="127" y="96" text-anchor="middle">unchanged</text>
+
+<line x1="220" y1="83" x2="256" y2="83" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="262" y="54" width="170" height="58" rx="7" fill="#1b2730" stroke="#3d5c6e"/>
+<text class="title" x="347" y="78" text-anchor="middle" fill="#9ccbe4">capture + redact</text>
+<text class="sub" x="347" y="96" text-anchor="middle">requests / httpx</text>
+
+<line x1="432" y1="83" x2="468" y2="83" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="474" y="54" width="186" height="58" rx="7" fill="#1a2620" stroke="#3f6f52"/>
+<text class="mono" x="567" y="78" text-anchor="middle" fill="#8fd4ab">recordings/billing</text>
+<text class="sub" x="567" y="96" text-anchor="middle">committed to the repo</text>
+
+<!-- lane 2: this week -->
+<text class="lbl" x="34" y="170">EVERY WEEK — CI RECORDS THE SAME FLOW</text>
+
+<rect x="34" y="184" width="186" height="58" rx="7" fill="#22262e" stroke="#3a404b"/>
+<text class="title" x="127" y="208" text-anchor="middle">Same script, sandbox</text>
+<text class="sub" x="127" y="226" text-anchor="middle">on a schedule</text>
+
+<line x1="220" y1="213" x2="256" y2="213" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="262" y="184" width="170" height="58" rx="7" fill="#1b2730" stroke="#3d5c6e"/>
+<text class="title" x="347" y="208" text-anchor="middle" fill="#9ccbe4">capture + redact</text>
+<text class="sub" x="347" y="226" text-anchor="middle">requests / httpx</text>
+
+<line x1="432" y1="213" x2="468" y2="213" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="474" y="184" width="186" height="58" rx="7" fill="#22262e" stroke="#3a404b"/>
+<text class="mono" x="567" y="208" text-anchor="middle" fill="#cdd1d9">recordings/today</text>
+<text class="sub" x="567" y="226" text-anchor="middle">throwaway</text>
+
+<!-- converge into diff -->
+<path d="M660 83 C 700 83, 700 128, 726 139" fill="none" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+<path d="M660 213 C 700 213, 700 168, 726 157" fill="none" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="734" y="119" width="132" height="58" rx="7" fill="#2a1f22" stroke="#7a4044"/>
+<text class="mono" x="800" y="143" text-anchor="middle" fill="#f2777a">apirecorder</text>
+<text class="mono" x="800" y="162" text-anchor="middle" fill="#f2777a">diff</text>
+
+<line x1="800" y1="177" x2="800" y2="207" stroke="#5c6475" stroke-width="1.4" marker-end="url(#a)"/>
+
+<rect x="688" y="213" width="178" height="30" rx="6" fill="#201d22" stroke="#4a3a40"/>
+<text class="mono" x="777" y="233" text-anchor="middle" fill="#f2777a">exit 1 · breaking change</text>
+
+<text class="sub" x="777" y="263" text-anchor="middle">additive changes still exit 0</text>
+
+<!-- footnote -->
+<line x1="34" y1="286" x2="866" y2="286" stroke="#272b33"/>
+<text class="sub" x="34" y="306">Values never matter — only shapes, types and status codes. New ids and timestamps every run cause no diff.</text>
+</svg>

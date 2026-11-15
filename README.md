@@ -1,27 +1,18 @@
 # apirecorder
 
-Record what a third-party API **actually does**, then diff it over time.
+**Record what a third-party API actually does, then diff it over time.**
 
 Wrap your existing integration code in a capture block. You get a redacted JSON
 recording of the real traffic, a behaviour report you can commit next to the
 code, and a `diff` that fails CI when the vendor changes something your code
 relies on.
 
-```
-BREAKING  POST /v1/subscriptions
-          primary status 201 -> 202
-BREAKING  POST /v1/subscriptions 201->202
-          `current_period_end` (number) is gone - it was present in all 1 baseline response(s)
-BREAKING  GET /v1/subscriptions 200
-          `has_more` (boolean) is gone - it was present in all 1 baseline response(s)
-ADDITIVE  GET /v1/subscriptions 200
-          `next_cursor` (string) added
-```
+![apirecorder diff catching a vendor change](docs/media/diff.gif)
 
-That is a real run. The vendor made creation asynchronous and renamed the
-pagination field — so one integration would start throwing `KeyError`, and
-another would silently stop after the first page. Both found before deploy, by a
-job that needed no assertions written for them.
+That is a real run against the demo in this repo. The vendor made creation
+asynchronous and renamed the pagination field — so one integration would start
+throwing `KeyError`, and another would silently stop after the first page.
+Both caught before deploy, by a job with no assertions written for them.
 
 ---
 
@@ -39,9 +30,9 @@ asserts that `has_more` exists, because `while resp["has_more"]` just worked —
 until it was renamed and the loop started exiting after one page, with every
 test still green.
 
-`apirecorder` compares the *whole* observed shape, including the fields your code
-doesn't read yet and the ones you never knew were there. It classifies what it
-finds, so additive vendor changes don't fail CI and get `--update`'d
+`apirecorder` compares the *whole* observed shape, including the fields your
+code doesn't read yet and the ones you never knew were there. It classifies what
+it finds, so additive vendor changes don't fail CI and get `--update`'d
 reflexively.
 
 It is snapshot testing, specialised for HTTP. The HTTP-specific parts are what
@@ -56,25 +47,32 @@ make it worth more than a generic snapshot library here:
 
 ---
 
+## How it works
+
+![How apirecorder detects API drift](docs/media/flow.svg)
+
+---
+
 ## Install
 
-```bash
-pip install apirecorder
-```
-
-There are no required dependencies. `apirecorder` patches whichever HTTP client
-you already use, and everything else is standard library. If you want the client
-pulled in as well:
+> **Not on PyPI yet.** `pip install apirecorder` will not work. Install from
+> GitHub:
 
 ```bash
-pip install "apirecorder[requests]"
+pip install "git+https://github.com/varun1414/api-recorder.git"
 ```
 
-```bash
-pip install "apirecorder[httpx]"
+Or pin it as a dev dependency — it is a development tool and should not ship to
+production:
+
+```toml
+[project.optional-dependencies]
+dev = ["apirecorder @ git+https://github.com/varun1414/api-recorder.git"]
 ```
 
-Supports Python 3.8+, `requests` 2.20+ and `httpx` 0.23+ (sync and async).
+There are no required runtime dependencies. `apirecorder` patches whichever HTTP
+client you already use, and everything else is standard library. Supports
+Python 3.8+, `requests` 2.20+ and `httpx` 0.23+ (sync and async).
 
 ### From source
 
@@ -84,6 +82,18 @@ git clone https://github.com/varun1414/api-recorder.git
 
 ```bash
 cd api-recorder && pip install -e ".[dev]"
+```
+
+---
+
+## Try it in ten seconds, with no API
+
+The repo ships a self-contained demo: it starts a fake billing API on loopback,
+records a baseline, restarts it as a drifted version, and prints all three
+outputs. No network access and no credentials needed.
+
+```bash
+python examples/demo.py
 ```
 
 ---
@@ -155,17 +165,7 @@ was cleaned up afterwards.
 apirecorder inspect recordings/billing
 ```
 
-```
-subscription_lifecycle - 5 interaction(s), 1.4s total  [recorded 2026-11-15T08:14:55+00:00]
-
-#  method  endpoint                status  ms   note
--  ------  ----------------------  ------  ---  -----
-1  POST    /v1/subscriptions       201     312
-2  GET     /v1/subscriptions/{id}  200     88
-3  PATCH   /v1/subscriptions/{id}  200     201
-4  GET     /v1/subscriptions       200     143
-5  DELETE  /v1/subscriptions/{id}  204     96   empty
-```
+![apirecorder inspect output](docs/media/inspect.png)
 
 ### 3. Write down what the API did
 
@@ -181,22 +181,11 @@ stable response headers, and the call sequence.
 
 **Not observed** — gaps in the recording:
 
-```
-- No 4xx or 5xx response recorded for `POST /v1/subscriptions` - its error handling is unexercised.
-- No 429 recorded anywhere - any rate-limit or retry path never ran.
-- No 401 or 403 recorded anywhere - auth failure and token refresh paths never ran.
-- The last recorded response from `GET /v1/subscriptions` still had `has_more` set, so the final page was never fetched.
-- `trial_end` was null in every recorded POST /v1/subscriptions 201 response - its real type is unknown.
-- Nothing written by `/v1/subscriptions` was ever read back with a GET, so the persisted shape is unverified.
-```
+![the not-observed section of a report](docs/media/report.png)
 
-Those are the lines you cannot get by reading your own code. Commit the report
-next to the integration, and commit `recordings/billing/` as your baseline.
+Those are the lines you cannot get by reading your own code.
 
 ### 4. Diff, forever after
-
-Run the same flow against the vendor's sandbox on a schedule, into a different
-directory, then:
 
 ```bash
 apirecorder diff recordings/billing recordings/billing-ci
@@ -207,15 +196,162 @@ straight into CI.
 
 ---
 
-## Try it without an API
+## Using it in a real project
 
-The repo ships a self-contained demo: it starts a fake billing API on loopback,
-records a baseline, restarts it as a drifted version, and prints all three
-outputs. No network access needed.
+### Step 1 — write one recording script
+
+This is the main thing to get right. It lives in `scripts/`, **not** in your test
+suite — your tests shouldn't hit the network, and this deliberately does.
+
+```python
+# scripts/record_billing_flow.py
+import argparse, os, requests
+from apirecorder import Recorder
+
+BASE = os.environ["BILLING_SANDBOX_URL"]
+
+def one_pass(s):
+    """Create, read, update, list, delete. Self-cleaning on purpose."""
+    sub = s.post(f"{BASE}/v1/subscriptions",
+                 json={"customer": "cus_test", "plan": "pro"}).json()
+    s.get(f"{BASE}/v1/subscriptions/{sub['id']}")
+    s.patch(f"{BASE}/v1/subscriptions/{sub['id']}", json={"plan": "enterprise"})
+    s.get(f"{BASE}/v1/subscriptions", params={"limit": "2"})
+    s.delete(f"{BASE}/v1/subscriptions/{sub['id']}")
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--out", default="recordings/billing")
+    p.add_argument("--iterations", type=int, default=5)
+    a = p.parse_args()
+
+    rec = Recorder(output=a.out, redact=["Authorization"])
+    s = requests.Session()
+    s.headers["Authorization"] = f"Bearer {os.environ['BILLING_TOKEN']}"
+
+    with rec.capture("subscription_lifecycle"):
+        for _ in range(a.iterations):
+            one_pass(s)
+    rec.save()
+
+if __name__ == "__main__":
+    main()
+```
+
+Three things in there matter:
+
+**It deletes what it creates.** Otherwise every CI run leaves junk in the sandbox
+and you will be rate-limited or locked out of it within a month.
+
+**`--iterations 5`, not 1.** This is the single most important tip in this
+README. With one pass, a field the API *sometimes* omits looks always-present in
+the baseline — and the next run reports its absence as a **breaking** removal.
+With five passes the baseline records it honestly as "3 of 5", and a later
+absence is only `info`. Multiple iterations are how you stop false alarms.
+
+**Sandbox, never production.** It does real writes.
+
+### Step 2 — first run, then actually read the output
 
 ```bash
-python examples/demo.py
+python scripts/record_billing_flow.py --out recordings/billing
 ```
+
+Before you commit anything, check the recordings yourself. Redaction catches
+known names; it cannot know your vendor puts a signed URL in a response body.
+
+```bash
+grep -rIE 'sk_|Bearer |eyJ|secret|password' recordings/billing | head
+```
+
+If something slipped through, add it to `redact=[...]` and re-record. Don't
+scrub the file by hand — the point is that the recorder never writes it.
+
+### Step 3 — commit the baseline and the report
+
+```bash
+apirecorder report recordings/billing -o docs/billing-behaviour.md
+```
+
+Commit both `recordings/billing/` and `docs/billing-behaviour.md`. The report is
+what your teammates read; the recordings are what CI diffs against.
+
+Read the **Not observed** section once, properly. That is your list of untested
+paths, and the only output that tells you something you could not have worked
+out from your own code.
+
+### Step 4 — the CI job
+
+Weekly suits most vendors. Daily is noise; monthly is too late.
+
+```yaml
+name: api-drift
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -e ".[dev]"
+
+      - name: Record today's run against the vendor sandbox
+        env:
+          BILLING_TOKEN: ${{ secrets.BILLING_SANDBOX_TOKEN }}
+          BILLING_SANDBOX_URL: ${{ secrets.BILLING_SANDBOX_URL }}
+        run: python scripts/record_billing_flow.py --out /tmp/billing-ci
+
+      - name: Diff against the committed baseline
+        run: apirecorder diff recordings/billing /tmp/billing-ci
+
+      - name: Publish the drift report
+        if: failure()
+        run: |
+          apirecorder diff recordings/billing /tmp/billing-ci \
+            --format markdown -o drift.md || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: drift-report
+          path: drift.md
+```
+
+Note `/tmp` for the CI recording — you never want the fresh run committed by
+accident.
+
+### Step 5 — the habit, when it goes red
+
+1. **Read the diff.** Breaking lines only; ignore info on the first pass.
+2. **Decide which it is:**
+   - *The vendor changed something you depend on* → fix the integration, then
+     re-record the baseline in the same PR.
+   - *The vendor changed something you don't depend on* → re-record the
+     baseline. One-line PR, deliberately.
+   - *Your recording script changed* → that shows as `info` coverage, not
+     `breaking`. If it is breaking, your script is doing something genuinely
+     different.
+3. **Never** update the baseline and fix the code in two PRs where the baseline
+   update lands first. That is how you lose the signal.
+
+Baseline updates should be their own small PR with the diff output pasted into
+the description. If someone can refresh a baseline without reading it, the whole
+thing becomes decoration.
+
+### What will *not* give you false positives
+
+**Only shapes and types are compared, never values.** New ids every run,
+changing timestamps, different amounts, varying `request-id` headers — none of
+it registers. Paths are templated, so `/subs/sub_9f21` and `/subs/sub_3b02` are
+the same operation. Latency is only reported when the p50 at least doubles *and*
+moves 200ms.
 
 ---
 
@@ -265,52 +401,6 @@ directory is skipped.
 | `--format markdown` | Render the diff as Markdown, for a PR comment |
 
 Exit codes: `0` nothing breaking, `1` breaking change found, `2` bad usage.
-
----
-
-## In CI
-
-```yaml
-name: api-drift
-on:
-  schedule:
-    - cron: "0 6 * * 1"
-  workflow_dispatch:
-
-jobs:
-  drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - run: pip install -e ".[requests]"
-
-      - name: Record today's run against the vendor sandbox
-        env:
-          BILLING_TOKEN: ${{ secrets.BILLING_SANDBOX_TOKEN }}
-        run: python scripts/record_billing_flow.py --out recordings/billing-ci
-
-      - name: Diff against the committed baseline
-        run: apirecorder diff recordings/billing recordings/billing-ci
-
-      - name: Publish the drift report
-        if: failure()
-        run: |
-          apirecorder diff recordings/billing recordings/billing-ci \
-            --format markdown -o drift.md || true
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: drift-report
-          path: drift.md
-```
-
-When it goes red, read the diff, then either fix your integration or update the
-baseline deliberately — never both at once, and never by reflex.
 
 ---
 
@@ -368,9 +458,36 @@ implies it knows more than it saw.
 
 Worth knowing before you rely on it.
 
+### GraphQL and single-endpoint APIs are not usefully supported
+
+Operations are keyed on `(method, templated path)`, and every GraphQL call is
+`POST /graphql`. So every query and mutation collapses into **one** operation and
+the field inventory becomes the union of every response shape you ever got,
+which makes the diff close to meaningless. The same applies, less severely, to
+any API that tunnels operations through a single endpoint (some SOAP and
+JSON-RPC services).
+
+Grouping by the operation name in the request body would fix this. It is not
+implemented. Until it is, don't point this at a GraphQL endpoint.
+
+### Everything else
+
 - **SDK-level capture only.** The hooks patch `requests` and `httpx`. An
   integration using `aiohttp`, `urllib3` directly, or a vendor SDK with its own
-  transport is not captured. A proxy mode would cover those and isn't built yet.
+  transport is not captured — `boto3`/`botocore` (urllib3) and
+  `google-api-python-client` (httplib2) are common examples. To check your own
+  SDK, wrap one call and see whether anything landed:
+
+  ```python
+  with rec.capture("probe"):
+      my_sdk.do_one_thing()
+  print(len(rec.interactions()))  # 0 means the SDK bypasses both hooks
+  ```
+
+- **XML and SOAP get no field analysis.** Those bodies are stored as text, so
+  `inspect`, status codes, latency and headers still work, but there is no
+  field inventory and no field-level diff. Inferring a schema from a string
+  would be guesswork.
 - **Patching is global and process-wide.** A capture block records traffic from
   every thread, and two `Recorder`s cannot capture at once (it raises rather
   than silently interleaving). Nested blocks are rejected.
@@ -400,15 +517,23 @@ The capture tests run against a real loopback HTTP server rather than a mocked
 transport — patching a client and asserting against a mock would only test the
 mock, not whether the patch points sit where the traffic actually is.
 
+The README's terminal media is generated, not hand-made. Regenerate it with:
+
+```bash
+pip install Pillow && python docs/make_media.py
+```
+
 ---
 
 ## Roadmap
 
 - **0.2** — replay: return recorded responses from the same patch points, for
-  offline tests
+  offline tests; GraphQL operation grouping
 - **0.3** — OpenAPI generation from the analysis pass
 - **0.4** — pytest fixture/test generation; optional proxy capture for clients
   the SDK hooks can't see
+
+Publishing to PyPI is pending; until then, install from GitHub as above.
 
 ---
 
