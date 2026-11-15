@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -e ".[dev]"
+
+      - run: python -m pytest -q
+
+      # The demo is also an end-to-end check: it records a baseline, simulates
+      # vendor drift and diffs the two. It exits 1 on purpose, because the
+      # drift it simulates is breaking.
+      - name: End-to-end demo
+        run: |
+          python examples/demo.py && exit 1 || test $? -eq 1
+
+      - name: Confirm the CLI entry point is wired up
+        run: apirecorder --version
